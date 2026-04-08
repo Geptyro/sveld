@@ -72867,8 +72867,8 @@ function injectProps(svelte, propNames) {
 </script>
 ` + svelte;
 }
-async function compileSvelte(source2) {
-  const tmpFile = path.join(os.tmpdir(), `svd-${Date.now()}.svelte`);
+async function compileSvelte(source2, originalFilePath) {
+  const tmpFile = path.join(path.dirname(originalFilePath), `._sveld_tmp_${Date.now()}.svelte`);
   fs.writeFileSync(tmpFile, source2, "utf8");
   try {
     const result = await esbuild.build({
@@ -73019,7 +73019,7 @@ var SvdEditorProvider = class _SvdEditorProvider {
       const { data: data2, actions } = serverScript ? await runServerScript(serverScript) : { data: {}, actions: {} };
       this._actions.set(uri.toString(), actions);
       const processed = injectProps(svelte, Object.keys(data2));
-      const componentJs = await compileSvelte(processed);
+      const componentJs = await compileSvelte(processed, uri.fsPath);
       webview.html = wrapHtml(componentJs, data2);
     } catch (e2) {
       webview.html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background)">

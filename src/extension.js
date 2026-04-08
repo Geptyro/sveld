@@ -90,8 +90,8 @@ function injectProps(svelte, propNames) {
 }
 
 // --- Compile Svelte component to self-contained IIFE ---
-async function compileSvelte(source) {
-  const tmpFile = path.join(os.tmpdir(), `svd-${Date.now()}.svelte`);
+async function compileSvelte(source, originalFilePath) {
+  const tmpFile = path.join(path.dirname(originalFilePath), `._sveld_tmp_${Date.now()}.svelte`);
   fs.writeFileSync(tmpFile, source, "utf8");
   try {
     const result = await esbuild.build({
@@ -259,7 +259,7 @@ class SvdEditorProvider {
       this._actions.set(uri.toString(), actions);
 
       const processed = injectProps(svelte, Object.keys(data));
-      const componentJs = await compileSvelte(processed);
+      const componentJs = await compileSvelte(processed, uri.fsPath);
 
       webview.html = wrapHtml(componentJs, data);
     } catch (e) {
