@@ -1,7 +1,7 @@
 {
   "name": "sveld",
   "displayName": "Sveld",
-  "description": "Render .svd files — Svelte components with live server-side data from MongoDB, REST APIs, files and more.",
+  "description": "Render .sveld files — Svelte components with live server-side data from MongoDB, REST APIs, files and more.",
   "version": "0.0.1",
   "publisher": "Geptyro",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "languages": [
       {
         "id": "svd",
-        "extensions": [".svd"],
+        "extensions": [".sveld"],
         "aliases": ["Svelte Data", "svd"]
       }
     ],
@@ -28,7 +28,7 @@
       {
         "viewType": "svd.preview",
         "displayName": "Sveld Preview",
-        "selector": [{ "filenamePattern": "*.svd" }],
+        "selector": [{ "filenamePattern": "*.sveld" }],
         "priority": "default"
       }
     ]
