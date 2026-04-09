@@ -36,6 +36,7 @@
   "main": "./dist/extension.js",
   "scripts": {
     "build": "node build.js",
+    "package": "npm run build && vsce package",
     "test": "jest"
   },
   "contributes": {

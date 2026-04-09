@@ -230,17 +230,30 @@ Import regular `.svelte` components from the same directory. They are bundled by
 
 ## Installation
 
-Until published to the marketplace, install locally by symlinking the extension folder:
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=CdricDessalles.sveld), or via terminal:
 
 ```bash
-# WSL / Linux remote
-ln -s /path/to/sveld ~/.vscode-server/extensions/sveld
-
-# Desktop VS Code (macOS/Linux)
-ln -s /path/to/sveld ~/.vscode/extensions/sveld
+code --install-extension CdricDessalles.sveld
 ```
 
-Then reload VS Code. Opening any `.sveld` file will automatically trigger the renderer.
+## Development
+
+**Build:**
+```bash
+npm run build
+```
+
+**Test the packaged extension locally** (validates exactly what the marketplace ships):
+```bash
+npm run package              # builds + creates sveld-x.x.x.vsix
+code --install-extension sveld-*.vsix
+```
+Reload VS Code after installing. This is the recommended way to validate before publishing.
+
+**Publish** (requires `VSCE_PAT` env var, or use CI by pushing a version tag):
+```bash
+npx vsce publish -p $VSCE_PAT
+```
 
 ---
 
