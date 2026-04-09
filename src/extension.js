@@ -1,5 +1,5 @@
 const vscode = require("vscode");
-const esbuild = require("esbuild-wasm");
+const esbuild = require("esbuild");
 const sveltePlugin = require("esbuild-svelte");
 const vm = require("vm");
 const fs = require("fs");
@@ -15,13 +15,6 @@ const { extractPackages, parseSvd, injectProps, loadDotenv } = require("./utils"
 const SVD_DIR = path.join(os.homedir(), ".svd");
 const SVD_MODULES = path.join(SVD_DIR, "node_modules");
 
-// --- Initialize esbuild WASM once ---
-let esbuildReady = false;
-async function ensureEsbuild() {
-  if (esbuildReady) return;
-  await esbuild.initialize({});
-  esbuildReady = true;
-}
 
 // --- Ensure ~/.svd exists ---
 function ensureSvdDir() {
@@ -112,7 +105,6 @@ async function runServerScript(script, filePath) {
 // --- Compile Svelte component to self-contained IIFE ---
 // Returns { js, deps } where deps is the set of real file paths bundled
 async function compileSvelte(source, originalFilePath) {
-  await ensureEsbuild();
   const tmpFile = path.join(path.dirname(originalFilePath), `._sveld_tmp_${Date.now()}.svelte`);
   fs.writeFileSync(tmpFile, source, "utf8");
   try {

@@ -1,6 +1,8 @@
 .vscode/**
 src/**
 node_modules/**
+!node_modules/esbuild/**
+!node_modules/@esbuild/**
 test/**
 .github/**
 build.js
