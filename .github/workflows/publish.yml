@@ -36,4 +36,4 @@ jobs:
           npm install @esbuild/${{ matrix.target }} --force
 
       - name: Publish
-        run: npx @vscode/vsce publish --target ${{ matrix.target }} -p ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --target ${{ matrix.target }} --no-dependencies -p ${{ secrets.VSCE_PAT }}
