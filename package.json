@@ -2,7 +2,7 @@
   "name": "sveld",
   "displayName": "Sveld",
   "description": "Render .sveld files — Svelte components with live server-side data from MongoDB, REST APIs, files and more.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "CdricDessalles",
   "license": "MIT",
   "icon": "icon.png",
@@ -60,11 +60,13 @@
       }
     ]
   },
-  "devDependencies": {
+  "dependencies": {
     "esbuild": "^0.25.0",
     "esbuild-svelte": "^0.9.4",
-    "jest": "^30.3.0",
     "sass": "^1.99.0",
     "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.3.0"
   }
 }
