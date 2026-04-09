@@ -43,6 +43,26 @@ function autoInstall(packages, sveldDir) {
 }
 
 // --- Run server script, returns { data, actions } ---
+// Transform ESM import/export syntax to CJS for VM compatibility
+function esmToCjs(src) {
+  return src
+    .replace(/import\s+\*\s+as\s+(\w+)\s+from\s+(['"`][^'"`]+['"`])/g, 'const $1 = require($2)')
+    .replace(/import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+(['"`][^'"`]+['"`])/g, 'const $1 = require($3); const {$2} = $1')
+    .replace(/import\s+\{([^}]+)\}\s+from\s+(['"`][^'"`]+['"`])/g, 'const {$1} = require($2)')
+    .replace(/import\s+(\w+)\s+from\s+(['"`][^'"`]+['"`])/g, 'const $1 = require($2)')
+    .replace(/export\s+default\s+/g, 'module.exports = ')
+    .replace(/export\s+\{([^}]+)\}/g, (_, names) => {
+      return names.split(',').map(n => {
+        const [local, exported] = n.trim().split(/\s+as\s+/);
+        const key = (exported || local).trim();
+        return `exports.${key} = ${local.trim()}`;
+      }).join('; ');
+    })
+    .replace(/export\s+(async\s+)?(function|class)\s+(\w+)/g, '$1$2 $3')
+    .replace(/export\s+const\s+(\w+)/g, 'const $1')
+    .replace(/export\s+let\s+(\w+)/g, 'let $1');
+}
+
 async function runServerScript(script, filePath) {
   const pDir = projectDir(path.dirname(filePath));
   const projectRequire = Module.createRequire(filePath);
@@ -52,10 +72,10 @@ async function runServerScript(script, filePath) {
     const fromRequire = Module.createRequire(fromFile);
     const hybridRequire = (id) => {
       if (id.startsWith('./') || id.startsWith('../') || path.isAbsolute(id)) {
-        // Local file — resolve, execute with hybridRequire so nested requires also go through it
+        // Local file — resolve, transform ESM, execute with hybridRequire
         const resolved = fromRequire.resolve(id);
         if (require.cache[resolved]) return require.cache[resolved].exports;
-        const src = fs.readFileSync(resolved, 'utf8');
+        const src = esmToCjs(fs.readFileSync(resolved, 'utf8'));
         const mod = { exports: {} };
         const wrapped = `(function(module,exports,require,__filename,__dirname){${src}\n})`;
         vm.runInThisContext(wrapped)(mod, mod.exports, makeHybridRequire(resolved), resolved, path.dirname(resolved));
@@ -77,7 +97,8 @@ async function runServerScript(script, filePath) {
 
   const cacheBefore = new Set(Object.keys(require.cache));
 
-  const wrapped = `(async function() {\n${script}\n})()`;
+  const cjsScript = esmToCjs(script);
+  const wrapped = `(async function() {\n${cjsScript}\n})()`;
   const result = await vm.runInNewContext(wrapped, {
     require: hybridRequire,
     console,

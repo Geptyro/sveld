@@ -4,7 +4,7 @@
 
 No web server. No build pipeline. Just open a `.sveld` file and it renders.
 
-![Sveld preview](media/screenshot.png)
+![Sveld preview](https://raw.githubusercontent.com/Geptyro/sveld/main/media/screenshot.png)
 
 ---
 
