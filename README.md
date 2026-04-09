@@ -261,10 +261,7 @@ Then reload VS Code. Opening any `.sveld` file will automatically trigger the re
 ## Ideas & Roadmap
 
 - **Syntax highlighting** — proper `.sveld` language grammar
-- **Marketplace publish** — one-click install
-- **Shared `db.js`** — import local helper files from the server block with automatic dep tracking
 - **Prop reactivity** — update props in-place after actions instead of full re-render
-- **More connectors** — PostgreSQL, SQLite, REST APIs, local CSV/JSON
 - **Export to HTML** — standalone static snapshot of any view
 
 ---
