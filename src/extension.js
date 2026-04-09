@@ -72,8 +72,20 @@ function autoInstall(packages, sveldDir) {
   if (!fs.existsSync(pDir)) fs.mkdirSync(pDir, { recursive: true });
   if (!fs.existsSync(path.join(pDir, "package.json")))
     fs.writeFileSync(path.join(pDir, "package.json"), JSON.stringify({ name: `svd-${path.basename(sveldDir)}`, version: "1.0.0" }));
+  // VS Code's extension host on Windows inherits a restricted PATH that may not include Node.js.
+  // Augment PATH with common install locations so npm can be found.
+  const env = { ...process.env };
+  if (process.platform === "win32") {
+    const extra = [
+      env.APPDATA && path.join(env.APPDATA, "npm"),
+      env.ProgramFiles && path.join(env.ProgramFiles, "nodejs"),
+      env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "nodejs"),
+      "C:\\Program Files\\nodejs",
+    ].filter(Boolean);
+    env.PATH = [...extra, env.PATH || ""].join(";");
+  }
   console.log(`SVD: installing ${missing.join(", ")} into ~/.svd/${path.basename(sveldDir)}...`);
-  execSync(`npm install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe", shell: true });
+  execSync(`npm install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe", shell: true, env });
   console.log(`SVD: installed ${missing.join(", ")}`);
 }
 
