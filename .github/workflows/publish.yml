@@ -33,7 +33,7 @@ jobs:
       - name: Install esbuild for target platform
         run: |
           rm -rf node_modules/@esbuild
-          npm install @esbuild/${{ matrix.target }}
+          npm install @esbuild/${{ matrix.target }} --force
 
       - name: Publish
         run: npx vsce publish --target ${{ matrix.target }} -p ${{ secrets.VSCE_PAT }}
