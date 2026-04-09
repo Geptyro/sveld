@@ -2,33 +2,60 @@
   "name": "sveld",
   "displayName": "Sveld",
   "description": "Render .sveld files — Svelte components with live server-side data from MongoDB, REST APIs, files and more.",
-  "version": "0.0.1",
-  "publisher": "Geptyro",
+  "version": "0.0.2",
+  "publisher": "CdricDessalles",
   "license": "MIT",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1e2334",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Geptyro/sveld.git"
   },
-  "engines": { "vscode": "^1.80.0" },
-  "categories": ["Visualization", "Other"],
-  "keywords": ["svelte", "mongodb", "data", "visualization", "live"],
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "svelte",
+    "mongodb",
+    "data",
+    "visualization",
+    "live",
+    "dashboard",
+    "sveld"
+  ],
+  "activationEvents": [
+    "onCustomEditor:svd.preview"
+  ],
   "main": "./dist/extension.js",
   "scripts": {
-    "build": "node build.js"
+    "build": "node build.js",
+    "test": "jest"
   },
   "contributes": {
     "languages": [
       {
-        "id": "svd",
-        "extensions": [".sveld"],
-        "aliases": ["Svelte Data", "svd"]
+        "id": "svelte",
+        "extensions": [
+          ".sveld"
+        ]
       }
     ],
     "customEditors": [
       {
         "viewType": "svd.preview",
         "displayName": "Sveld Preview",
-        "selector": [{ "filenamePattern": "*.sveld" }],
+        "selector": [
+          {
+            "filenamePattern": "*.sveld"
+          }
+        ],
         "priority": "default"
       }
     ]
@@ -36,6 +63,8 @@
   "devDependencies": {
     "esbuild": "^0.25.0",
     "esbuild-svelte": "^0.9.4",
+    "jest": "^30.3.0",
+    "sass": "^1.99.0",
     "svelte": "^5.0.0"
   }
 }

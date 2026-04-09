@@ -1,0 +1,11 @@
+.vscode/**
+src/**
+node_modules/**
+test/**
+.github/**
+build.js
+icon.svg
+image.png
+package-lock.json
+.gitignore
+.env

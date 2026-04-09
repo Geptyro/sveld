@@ -5,8 +5,12 @@ const vm = require("vm");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const crypto = require("crypto");
 const { execSync } = require("child_process");
 const Module = require("module");
+const sass = require("sass");
+
+const { extractPackages, parseSvd, injectProps, loadDotenv } = require("./utils");
 
 const SVD_DIR = path.join(os.homedir(), ".svd");
 const SVD_MODULES = path.join(SVD_DIR, "node_modules");
@@ -19,77 +23,84 @@ function ensureSvdDir() {
     fs.writeFileSync(pkg, JSON.stringify({ name: "svd-packages", version: "1.0.0" }));
 }
 
-// --- Extract package names from import/require statements ---
-const BUILTINS = new Set([
-  "fs", "path", "os", "http", "https", "vm", "crypto", "url", "util",
-  "events", "stream", "child_process", "buffer", "assert", "net", "tls",
-  "dns", "querystring", "readline", "cluster", "worker_threads", "module",
-]);
-
-function extractPackages(source) {
-  const packages = new Set();
-  for (const m of source.matchAll(/from\s+['"]([^'"./][^'"]*)['"]/g))
-    packages.add(m[1].split("/")[0]);
-  for (const m of source.matchAll(/require\(['"]([^'"./][^'"]*)['"]\)/g))
-    packages.add(m[1].split("/")[0]);
-  return [...packages].filter((p) => !BUILTINS.has(p));
+// --- Auto-install missing packages into ~/.svd ---
+function projectDir(sveldDir) {
+  const hash = crypto.createHash("sha1").update(sveldDir).digest("hex").slice(0, 8);
+  return path.join(SVD_DIR, `${path.basename(sveldDir)}-${hash}`);
 }
 
-// --- Auto-install missing packages into ~/.svd ---
-function autoInstall(packages) {
-  ensureSvdDir();
-  const missing = packages.filter(
-    (p) => !fs.existsSync(path.join(SVD_MODULES, p))
-  );
+function autoInstall(packages, sveldDir) {
+  const pDir = projectDir(sveldDir);
+  const pMods = path.join(pDir, "node_modules");
+  const missing = packages.filter((p) => !fs.existsSync(path.join(pMods, p)));
   if (missing.length === 0) return;
-  console.log(`SVD: installing ${missing.join(", ")}...`);
-  execSync(`npm install ${missing.join(" ")} --prefix "${SVD_DIR}"`, { stdio: "pipe" });
+  if (!fs.existsSync(pDir)) fs.mkdirSync(pDir, { recursive: true });
+  if (!fs.existsSync(path.join(pDir, "package.json")))
+    fs.writeFileSync(path.join(pDir, "package.json"), JSON.stringify({ name: `svd-${path.basename(sveldDir)}`, version: "1.0.0" }));
+  console.log(`SVD: installing ${missing.join(", ")} into ~/.svd/${path.basename(sveldDir)}...`);
+  execSync(`npm install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe" });
   console.log(`SVD: installed ${missing.join(", ")}`);
 }
 
-// --- Parse .svd file ---
-function parseSvd(source) {
-  const match = source.match(/<script\s+context="server">([\s\S]*?)<\/script>/);
-  const serverScript = match ? match[1].trim() : null;
-  const svelte = source.replace(
-    /<script\s+context="server">[\s\S]*?<\/script>\n?/, ""
-  );
-  return { serverScript, svelte };
-}
-
 // --- Run server script, returns { data, actions } ---
-async function runServerScript(script) {
-  const svdRequire = Module.createRequire(path.join(SVD_DIR, "index.js"));
+async function runServerScript(script, filePath) {
+  const pDir = projectDir(path.dirname(filePath));
+  const projectRequire = Module.createRequire(filePath);
+  const svdRequire = Module.createRequire(path.join(pDir, "index.js"));
+
+  function makeHybridRequire(fromFile) {
+    const fromRequire = Module.createRequire(fromFile);
+    const hybridRequire = (id) => {
+      if (id.startsWith('./') || id.startsWith('../') || path.isAbsolute(id)) {
+        // Local file — resolve, execute with hybridRequire so nested requires also go through it
+        const resolved = fromRequire.resolve(id);
+        if (require.cache[resolved]) return require.cache[resolved].exports;
+        const src = fs.readFileSync(resolved, 'utf8');
+        const mod = { exports: {} };
+        const wrapped = `(function(module,exports,require,__filename,__dirname){${src}\n})`;
+        vm.runInThisContext(wrapped)(mod, mod.exports, makeHybridRequire(resolved), resolved, path.dirname(resolved));
+        require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: mod.exports };
+        return mod.exports;
+      }
+      // npm package — try project first, then svd
+      try { return fromRequire(id); } catch { return svdRequire(id); }
+    };
+    return hybridRequire;
+  }
+
+  const hybridRequire = makeHybridRequire(filePath);
+
+  // Load .env: global (~/.svd/.env) overridden by local (next to the .sveld file)
+  const globalEnv = loadDotenv(path.join(SVD_DIR, ".env"));
+  const localEnv = loadDotenv(path.join(path.dirname(filePath), ".env"));
+  const env = { ...process.env, ...globalEnv, ...localEnv };
+
+  const cacheBefore = new Set(Object.keys(require.cache));
+
   const wrapped = `(async function() {\n${script}\n})()`;
   const result = await vm.runInNewContext(wrapped, {
-    require: svdRequire,
+    require: hybridRequire,
     console,
-    process,
+    process: { ...process, env },
     URL,
     setTimeout,
     clearTimeout,
   }) || {};
 
+  const serverDeps = new Set(
+    Object.keys(require.cache).filter(k => !cacheBefore.has(k) && !k.includes("node_modules"))
+  );
+
   // Support both { data, actions } and legacy { ...data }
   if (result.data && typeof result.data === "object") {
-    return { data: result.data, actions: result.actions || {} };
+    return { data: result.data, actions: result.actions || {}, serverDeps };
   }
-  return { data: result, actions: {} };
+  return { data: result, actions: {}, serverDeps };
 }
 
-// --- Inject missing exported props into the Svelte <script> block ---
-function injectProps(svelte, propNames) {
-  const missing = propNames.filter(
-    (n) => !new RegExp(`export\\s+let\\s+${n}[\\s=;]`).test(svelte)
-  );
-  if (missing.length === 0) return svelte;
-  const props = missing.map((n) => `export let ${n} = [];`).join("\n  ");
-  if (svelte.includes("<script>"))
-    return svelte.replace("<script>", `<script>\n  ${props}`);
-  return `<script>\n  ${props}\n</script>\n` + svelte;
-}
 
 // --- Compile Svelte component to self-contained IIFE ---
+// Returns { js, deps } where deps is the set of real file paths bundled
 async function compileSvelte(source, originalFilePath) {
   const tmpFile = path.join(path.dirname(originalFilePath), `._sveld_tmp_${Date.now()}.svelte`);
   fs.writeFileSync(tmpFile, source, "utf8");
@@ -100,28 +111,47 @@ async function compileSvelte(source, originalFilePath) {
       write: false,
       format: "iife",
       globalName: "SvdComponent",
-      plugins: [sveltePlugin({ compilerOptions: { compatibility: { componentApi: 4 } } })],
-      nodePaths: [SVD_MODULES, path.join(__dirname, "..", "node_modules")],
+      metafile: true,
+      plugins: [sveltePlugin({
+        preprocess: {
+          style: ({ content, attributes, filename }) => {
+            if (attributes.lang !== 'scss') return;
+            const result = sass.compileString(content, {
+              loadPaths: [path.dirname(filename || '.')],
+            });
+            return { code: result.css };
+          }
+        },
+        compilerOptions: { css: "injected", compatibility: { componentApi: 4 } },
+      })],
+      nodePaths: [path.dirname(originalFilePath), path.join(projectDir(path.dirname(originalFilePath)), "node_modules"), SVD_MODULES, path.join(__dirname, "..", "node_modules")],
       logLevel: "silent",
     });
-    return result.outputFiles[0].text;
+    const deps = new Set(
+      Object.keys(result.metafile.inputs)
+        .map(f => path.resolve(f))
+        .filter(f => !f.includes("node_modules") && f !== tmpFile)
+    );
+    return { js: result.outputFiles[0].text, deps };
   } finally {
     fs.unlinkSync(tmpFile);
   }
 }
 
 // --- HTML shell ---
-function wrapHtml(componentJs, data) {
+function wrapHtml(componentJs, data, filename = '') {
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <style>
+    html, body {
+      background: #1e2334;
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      padding: 2rem; max-width: 900px; margin: 0 auto;
-      color: var(--vscode-editor-foreground);
-      background: var(--vscode-editor-background);
+      padding: 2rem; max-width: 1400px; margin: 0 auto;
+      color: #e8eaf0;
       line-height: 1.6;
     }
     table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
@@ -129,64 +159,42 @@ function wrapHtml(componentJs, data) {
     th { background: var(--vscode-editorGroupHeader-tabsBackground); font-weight: 600; }
     tr:hover { background: var(--vscode-list-hoverBackground); }
     h1, h2, h3 { border-bottom: 1px solid var(--vscode-panel-border, #444); padding-bottom: 0.3rem; }
-    #svd-toolbar {
-      position: sticky; top: 0;
-      display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end;
-      padding: 0.5rem 0;
-      background: var(--vscode-editor-background);
-      border-bottom: 1px solid var(--vscode-panel-border, #444);
-      font-size: 0.75rem; opacity: 0.7;
-      transition: opacity 0.2s;
-      z-index: 10;
-    }
-    #svd-toolbar:hover { opacity: 1; }
-    #svd-toolbar button {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none; border-radius: 3px;
-      padding: 3px 8px; cursor: pointer; font-size: 0.75rem;
-    }
-    #svd-toolbar button:hover { background: var(--vscode-button-hoverBackground); }
-    #svd-toolbar input {
-      background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border: 1px solid var(--vscode-input-border, #555);
-      border-radius: 3px; padding: 3px 6px; font-size: 0.75rem;
-    }
-    #svd-toolbar input::placeholder { color: var(--vscode-input-placeholderForeground); }
   </style>
 </head>
 <body>
-  <div id="svd-toolbar">
-    <input id="svd-interval" list="svd-interval-options" placeholder="auto-refresh (s)"
-      onchange="onIntervalChange(this.value)" style="width:140px" />
-    <datalist id="svd-interval-options">
-      <option value="5">5s</option>
-      <option value="10">10s</option>
-      <option value="30">30s</option>
-      <option value="60">60s</option>
-    </datalist>
-    <button onclick="refresh()">↻ Refresh</button>
-  </div>
   <div id="app"></div>
   <script>
     const vscode = acquireVsCodeApi();
-    let _timer = null;
 
-    function refresh() { vscode.postMessage({ type: 'refresh' }); }
+    // Re-fetch data and re-render the whole view
+    function sveldRefresh() { vscode.postMessage({ type: 'refresh' }); }
 
-    function onIntervalChange(val) {
-      clearInterval(_timer);
-      const seconds = parseInt(val);
-      if (seconds > 0) _timer = setInterval(refresh, seconds * 1000);
+    // Open a relative .sveld file in a side panel
+    function sveldOpen(relativePath) { vscode.postMessage({ type: 'open', path: relativePath }); }
+
+    // Reopen the current file in the text editor
+    function sveldEdit() { vscode.postMessage({ type: 'openTextEditor' }); }
+
+    // Call a server-side action.
+    // - If the action returns a value → resolves with that value, no re-render
+    // - If the action returns nothing → triggers a full re-render
+    const _pending = new Map();
+    let _nextId = 0;
+    function sveldAction(name, payload) {
+      return new Promise((resolve) => {
+        const id = ++_nextId;
+        _pending.set(id, resolve);
+        vscode.postMessage({ type: 'action', name, payload, id });
+      });
     }
-
-    // Global action caller — fire and forget, extension re-renders after
-    function svdAction(name, payload) {
-      vscode.postMessage({ type: 'action', name, payload });
-    }
+    window.addEventListener('message', (e) => {
+      if (e.data.type === 'actionResult') {
+        const resolve = _pending.get(e.data.id);
+        if (resolve) { _pending.delete(e.data.id); resolve(e.data.result); }
+      }
+    });
   </script>
-  <script>const __DATA__ = ${JSON.stringify(data)};</script>
+  <script>const __DATA__ = ${JSON.stringify(data)}; const __SVELD_FILE__ = ${JSON.stringify(filename)};</script>
   <script>${componentJs}</script>
   <script>new SvdComponent.default({ target: document.getElementById("app"), props: __DATA__ });</script>
 </body>
@@ -197,6 +205,13 @@ function wrapHtml(componentJs, data) {
 class SvdEditorProvider {
   constructor() {
     this._actions = new Map(); // uri → actions object
+    this._panels = new Map(); // uri → webviewPanel
+  }
+
+  _broadcast(msg) {
+    for (const panel of this._panels.values()) {
+      panel.webview.postMessage(msg);
+    }
   }
 
   static register(context) {
@@ -214,33 +229,109 @@ class SvdEditorProvider {
 
   async resolveCustomEditor(document, webviewPanel) {
     webviewPanel.webview.options = { enableScripts: true };
-    await this.render(document.uri, webviewPanel.webview);
 
-    // Re-render on file change
-    const watcher = vscode.workspace.createFileSystemWatcher(document.uri.fsPath);
-    watcher.onDidChange(() => this.render(document.uri, webviewPanel.webview));
+    let depWatchers = new Map(); // fsPath → FileSystemWatcher
+    let serverDepPaths = new Set(); // currently tracked server-side deps
+
+    const updateDepWatchers = (newDeps, newServerDeps) => {
+      for (const [fsPath, w] of depWatchers) {
+        if (!newDeps.has(fsPath)) { w.dispose(); depWatchers.delete(fsPath); }
+      }
+      for (const fsPath of newDeps) {
+        if (!depWatchers.has(fsPath)) {
+          const isServerDep = newServerDeps.has(fsPath);
+          const w = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(vscode.Uri.file(path.dirname(fsPath)), path.basename(fsPath))
+          );
+          const onChange = () => {
+            if (isServerDep) delete require.cache[fsPath];
+            doRender();
+          };
+          w.onDidChange(onChange);
+          w.onDidCreate(onChange);
+          depWatchers.set(fsPath, w);
+        }
+      }
+      serverDepPaths = newServerDeps;
+    };
+
+    const doRender = async () => {
+      const result = await this.render(document.uri, webviewPanel.webview);
+      if (result) { updateDepWatchers(result.deps, result.serverDeps); }
+      // Re-broadcast focus so re-rendered panels restore the highlighted link
+      if (webviewPanel.active) {
+        this._broadcast({ type: 'focusChange', file: path.basename(document.uri.fsPath) });
+      }
+    };
+
+    // Re-render when the .sveld file itself is saved from a VS Code text editor
+    const saveWatcher = vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (doc.uri.fsPath === document.uri.fsPath) doRender();
+    });
+
+    this._panels.set(document.uri.toString(), webviewPanel);
+    await doRender();
+
+    webviewPanel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        this._broadcast({ type: 'focusChange', file: path.basename(document.uri.fsPath) });
+      } else {
+        setTimeout(() => {
+          const anyActive = [...this._panels.values()].some(p => p.active);
+          if (!anyActive) this._broadcast({ type: 'focusChange', file: '' });
+        }, 100);
+      }
+    });
+
     webviewPanel.onDidDispose(() => {
-      watcher.dispose();
+      saveWatcher.dispose();
+      for (const w of depWatchers.values()) w.dispose();
       this._actions.delete(document.uri.toString());
+      this._panels.delete(document.uri.toString());
     });
 
     // Handle messages from the webview
     webviewPanel.webview.onDidReceiveMessage(async (msg) => {
-      if (msg.type === "refresh") {
-        await this.render(document.uri, webviewPanel.webview);
+      if (msg.type === "openTextEditor") {
+        vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+      } else if (msg.type === "open") {
+        const targetUri = vscode.Uri.file(path.resolve(path.dirname(document.uri.fsPath), msg.path));
+        let targetColumn = null;
+        for (const group of vscode.window.tabGroups.all) {
+          for (const tab of group.tabs) {
+            if (tab.input?.uri?.fsPath === targetUri.fsPath) {
+              targetColumn = group.viewColumn; // already open — focus it
+              break;
+            }
+          }
+          if (targetColumn) break;
+        }
+        if (!targetColumn) {
+          // Use an existing column that isn't the current one, or create beside
+          const otherGroup = vscode.window.tabGroups.all.find(g => g.viewColumn !== webviewPanel.viewColumn);
+          targetColumn = otherGroup ? otherGroup.viewColumn : vscode.ViewColumn.Beside;
+        }
+        await vscode.commands.executeCommand("vscode.open", targetUri, targetColumn);
+      } else if (msg.type === "refresh") {
+        await doRender();
       } else if (msg.type === "action") {
         const actions = this._actions.get(document.uri.toString()) || {};
         const fn = actions[msg.name];
-        if (fn) {
-          try {
-            await fn(msg.payload);
-          } catch (e) {
-            console.error(`SVD action '${msg.name}' error:`, e.message);
-          }
-        } else {
-          console.warn(`SVD: unknown action '${msg.name}'`);
+        if (!fn) { console.warn(`SVD: unknown action '${msg.name}'`); return; }
+        let result;
+        try {
+          result = await fn(msg.payload);
+        } catch (e) {
+          console.error(`SVD action '${msg.name}' error:`, e.message);
+          return;
         }
-        await this.render(document.uri, webviewPanel.webview);
+        if (result !== undefined) {
+          // Data query — return result, no re-render
+          webviewPanel.webview.postMessage({ type: 'actionResult', id: msg.id, result });
+        } else {
+          // Mutation — re-render
+          await doRender();
+        }
       }
     });
   }
@@ -250,18 +341,21 @@ class SvdEditorProvider {
       const source = fs.readFileSync(uri.fsPath, "utf8");
       const { serverScript, svelte } = parseSvd(source);
 
-      autoInstall(extractPackages(source));
+      autoInstall(extractPackages(source), path.dirname(uri.fsPath));
 
-      const { data, actions } = serverScript
-        ? await runServerScript(serverScript)
-        : { data: {}, actions: {} };
+      const { data, actions, serverDeps } = serverScript
+        ? await runServerScript(serverScript, uri.fsPath)
+        : { data: {}, actions: {}, serverDeps: new Set() };
 
       this._actions.set(uri.toString(), actions);
 
       const processed = injectProps(svelte, Object.keys(data));
-      const componentJs = await compileSvelte(processed, uri.fsPath);
+      const { js, deps } = await compileSvelte(processed, uri.fsPath);
+      deps.add(uri.fsPath);
+      for (const d of serverDeps) deps.add(d);
 
-      webview.html = wrapHtml(componentJs, data);
+      webview.html = wrapHtml(js, data, path.basename(uri.fsPath));
+      return { deps, serverDeps };
     } catch (e) {
       webview.html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background)">
         <strong style="color:red">Error:</strong><pre>${e.stack || e.message}</pre>

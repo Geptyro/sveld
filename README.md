@@ -4,11 +4,13 @@
 
 No web server. No build pipeline. Just open a `.sveld` file and it renders.
 
+![Sveld preview](media/screenshot.png)
+
 ---
 
 ## How it works
 
-A `.sveld` file is a standard Svelte component with one extra block: `<script context="server">`. This block runs in the VS Code extension host (full Node.js access), fetches data from any source, and injects it as props into the Svelte component rendered in the webview.
+A `.sveld` file is a standard Svelte component with one optional block: `<script context="server">`. This block runs in the VS Code extension host (full Node.js access), fetches data from any source, and injects it as props into the Svelte component rendered in the webview.
 
 ```svelte
 <script context="server">
@@ -26,11 +28,11 @@ A `.sveld` file is a standard Svelte component with one extra block: `<script co
   export let users = []
 </script>
 
-<h1>{users.length} users</h1>
-
-{#each users as user}
-  <p>{user.name} — {user.email}</p>
-{/each}
+<ul>
+  {#each users as user}
+    <li>{user.name}</li>
+  {/each}
+</ul>
 ```
 
 ---
@@ -38,29 +40,26 @@ A `.sveld` file is a standard Svelte component with one extra block: `<script co
 ## Features
 
 ### Server-side data block
-The `<script context="server">` block runs in Node.js. Use it to query databases, read files, call REST APIs — anything you can do in Node.js.
+The `<script context="server">` block runs in Node.js with full access to `require()`, `process`, `URL`, `setTimeout`, and any npm package. Use it to query databases, read files, call REST APIs, or run any Node.js code. Return `{ data: { ...props } }` to inject values as Svelte props.
 
-### Auto package installation
-Any `require()` or `import` in your `.sveld` file is automatically installed into `~/.sveld/node_modules` on first use. No `npm install` needed.
+### Actions
+The server block can expose `actions` — async functions that run server-side when called from the component via the globally available `sveldAction(name, payload)`.
 
-```svelte
-<script context="server">
-  const { MongoClient } = require('mongodb')   // auto-installed on first open
-  const axios = require('axios')               // same
-  ...
-</script>
-```
-
-### Write-back actions
-The server block can expose `actions` — async functions that run server-side when triggered from the Svelte component. Use `svdAction(name, payload)` (globally available) to call them.
+- If an action **returns a value**, it resolves as a Promise in the component — no re-render.
+- If an action **returns nothing**, the view fully re-renders with fresh data.
 
 ```svelte
 <script context="server">
   return {
     data: { items },
     actions: {
-      async deleteItem({ id }) {
-        await collection.deleteOne({ _id: id })
+      async addItem({ name }) {
+        await collection.insertOne({ name })
+        // returns nothing → triggers re-render
+      },
+      async search({ query }) {
+        return collection.find({ name: query }).toArray()
+        // returns value → no re-render, resolves in component
       }
     }
   }
@@ -68,49 +67,113 @@ The server block can expose `actions` — async functions that run server-side w
 
 <script>
   export let items = []
-</script>
 
-{#each items as item}
-  <button onclick={() => svdAction('deleteItem', { id: item._id })}>Delete</button>
-{/each}
+  async function handleSearch() {
+    const results = await sveldAction('search', { query: 'tea' })
+    // results available here, no page re-render
+  }
+</script>
 ```
 
-After an action runs, data is automatically re-fetched and the view re-renders.
+### Auto package installation
+Any package `require()`d in the server block is automatically installed into `~/.svd/node_modules` on first use. No manual `npm install` needed.
 
-### Toolbar
-A sticky toolbar is always visible with:
-- **↻ Refresh** — manually re-fetch data and re-render
-- **Auto-refresh input** — type any interval in seconds (or pick 5 / 10 / 30 / 60) to auto-refresh
+```svelte
+<script context="server">
+  const { MongoClient } = require('mongodb')  // auto-installed on first open
+  const Chart = require('chart.js/auto')      // same
+</script>
+```
 
-### Theme-aware
-The default styles use VS Code CSS variables and adapt automatically to light and dark themes.
+### SCSS support
+Svelte `<style lang="scss">` blocks are compiled automatically via Dart Sass. Import shared stylesheets using `@use` or `@import`:
+
+```svelte
+<style lang="scss">
+  @use './components/theme.scss';
+
+  .card {
+    background: var(--bg-card);
+    &:hover { border-color: var(--accent); }
+  }
+</style>
+```
+
+### File watcher
+Sveld tracks every file bundled into the component (Svelte files, imported JS, SCSS partials) using esbuild's metafile. Saving any of those files automatically re-renders the view — no manual refresh needed.
+
+### Environment variables (`.env`)
+Sveld automatically loads `.env` files in two locations:
+
+| File | Purpose |
+|------|---------|
+| `~/.svd/.env` | Global secrets (shared across all `.sveld` files) |
+| `.env` next to the `.sveld` file | Local overrides for that project |
+
+Local values override global ones. Variables are available as `process.env.MY_VAR` in the server block.
+
+```
+# ~/.svd/.env
+MONGO_URI=mongodb://localhost:27017
+MONGO_DB=myapp
+```
+
+### Multi-panel focus broadcast
+When multiple `.sveld` files are open, the extension broadcasts which panel is currently active to all other panels. Each panel can use this to highlight the active tab in a shared navigation header.
+
+- `onDidChangeViewState` fires when a panel gains or loses focus.
+- A `focusChange` message (with the active filename) is posted to every open sveld panel.
+- When switching to a non-sveld editor, a 100ms debounce clears the highlight in all panels.
+
+### Navigation between sveld files
+Call `sveldOpen('./path/to/other.sveld')` (globally available in the webview) to open another `.sveld` file:
+
+- If the target is already open in another column, it is focused there.
+- Otherwise it opens beside the current panel.
+
+### Svelte component imports
+Import regular `.svelte` components from the same directory. They are bundled by esbuild at render time and hot-reloaded when their source changes (tracked via the file watcher).
+
+```svelte
+<script>
+  import MyChart from './components/MyChart.svelte'
+  export let data = []
+</script>
+
+<MyChart {data} />
+```
 
 ---
 
-## Format
+## Global webview functions
 
-A `.sveld` file is structured as follows:
+| Function | Description |
+|----------|-------------|
+| `sveldAction(name, payload)` | Call a server-side action. Returns a Promise. |
+| `sveldOpen(relativePath)` | Open another `.sveld` file in VS Code. |
+| `sveldRefresh()` | Trigger a full re-render of the current panel. |
+
+---
+
+## File format
 
 ```
 <script context="server">
-  // Runs in Node.js (extension host)
-  // Has access to require(), process, etc.
-  // Must return { data: { ...props }, actions: { ...fns } }
+  // Node.js — runs in the extension host
+  // Has access to require(), process.env, etc.
   // Packages are auto-installed from npm on first use
+  // Must return { data: { ...props }, actions: { ...fns } }
 </script>
 
-<!-- Everything below is standard Svelte -->
+<!-- Standard Svelte below -->
 <script>
-  export let myData = []
+  export let myProp = []
 </script>
 
-<h1>Hello</h1>
-{#each myData as item}
-  <p>{item.name}</p>
-{/each}
+<div>{myProp.length} items</div>
 
-<style>
-  h1 { color: red; }
+<style lang="scss">
+  /* SCSS supported */
 </style>
 ```
 
@@ -121,8 +184,10 @@ A `.sveld` file is structured as follows:
 Until published to the marketplace, install locally by symlinking the extension folder:
 
 ```bash
+# WSL / Linux remote
 ln -s /path/to/sveld ~/.vscode-server/extensions/sveld
-# or for desktop VS Code:
+
+# Desktop VS Code (macOS/Linux)
 ln -s /path/to/sveld ~/.vscode/extensions/sveld
 ```
 
@@ -130,37 +195,28 @@ Then reload VS Code. Opening any `.sveld` file will automatically trigger the re
 
 ---
 
-## Ideas & Roadmap
-
-- **More connectors** — PostgreSQL, SQLite, REST APIs, local CSV/JSON files
-- **Multiple server blocks** — named data sources composed together
-- **Prop reactivity** — update Svelte props in-place after actions instead of full re-render
-- **Error overlay** — better in-view error display with stack traces
-- **Syntax highlighting** — proper `.sveld` language grammar for VS Code
-- **Marketplace publish** — one-click install from the VS Code extension marketplace
-- **Shared components** — import `.sveld` partials into other `.sveld` files
-- **`$sveld` store** — reactive store that re-fetches on demand from within the component
-- **Export to HTML** — generate a standalone static HTML snapshot of any view
-
----
-
-## Example use cases
-
-- Personal dashboards (cold brew tracker, finance, habits)
-- MongoDB collection browsers
-- Internal admin panels without a web server
-- Data exploration during development
-- Lightweight BI views next to your code
-
----
-
 ## Tech stack
 
-- **Svelte 5** — component framework
-- **esbuild** + **esbuild-svelte** — compiles `.sveld` files on the fly
-- **VS Code Custom Editor API** — renders the webview on file open
-- **Node.js `vm`** — sandboxed execution of the server block
-- Packages auto-installed to **`~/.sveld/node_modules`** on demand
+| Component | Role |
+|-----------|------|
+| **Svelte 5** | Component framework (Svelte 4 compat mode) |
+| **esbuild** + **esbuild-svelte** | Compiles `.sveld` files on the fly |
+| **Dart Sass** | SCSS preprocessing |
+| **VS Code Custom Editor API** | Renders the webview on file open |
+| **Node.js `vm`** | Sandboxed execution of the server block |
+| **esbuild metafile** | Precise dependency tracking for the file watcher |
+| **`~/.svd/node_modules`** | Shared npm package store, auto-populated |
+
+---
+
+## Ideas & Roadmap
+
+- **Syntax highlighting** — proper `.sveld` language grammar
+- **Marketplace publish** — one-click install
+- **Shared `db.js`** — import local helper files from the server block with automatic dep tracking
+- **Prop reactivity** — update props in-place after actions instead of full re-render
+- **More connectors** — PostgreSQL, SQLite, REST APIs, local CSV/JSON
+- **Export to HTML** — standalone static snapshot of any view
 
 ---
 
