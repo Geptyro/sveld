@@ -2,7 +2,7 @@
   "name": "sveld",
   "displayName": "Sveld",
   "description": "Render .sveld files — Svelte components with live server-side data from MongoDB, REST APIs, files and more.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "CdricDessalles",
   "license": "MIT",
   "icon": "icon.png",
@@ -36,6 +36,7 @@
   "main": "./dist/extension.js",
   "scripts": {
     "build": "node build.js",
+    "link": "ln -sf $PWD ~/.vscode-server/extensions/cdricdessalles.sveld-dev && npm run build",
     "install-local": "npm run build && vsce package && code --install-extension $(ls sveld-*.vsix | tail -1)",
     "test": "jest"
   },

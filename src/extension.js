@@ -9,11 +9,45 @@ const crypto = require("crypto");
 const { execSync } = require("child_process");
 const Module = require("module");
 const sass = require("sass");
+const EventEmitter = require("events");
 
 const { extractPackages, parseSvd, injectProps, loadDotenv } = require("./utils");
 
 const SVD_DIR = path.join(os.homedir(), ".svd");
 const SVD_MODULES = path.join(SVD_DIR, "node_modules");
+
+// --- Shared context per project directory ---
+// Persists across renders; lets server scripts communicate across panels.
+class SharedContext {
+  constructor() {
+    this._emitter = new EventEmitter();
+    this._emitter.setMaxListeners(100);
+    this._panelListeners = new Map(); // panelUri → [{event, fn}]
+    this.state = {};
+  }
+
+  // Returns a panel-scoped API injected into the server script VM.
+  // Listeners registered via .on() are tagged to the panel and cleared before each re-render.
+  forPanel(panelUri, sendFn) {
+    const ctx = this;
+    return {
+      on(event, fn) {
+        ctx._emitter.on(event, fn);
+        if (!ctx._panelListeners.has(panelUri)) ctx._panelListeners.set(panelUri, []);
+        ctx._panelListeners.get(panelUri).push({ event, fn });
+      },
+      emit(event, ...args) { ctx._emitter.emit(event, ...args); },
+      state: this.state,
+    };
+  }
+
+  clearPanel(panelUri) {
+    for (const { event, fn } of (this._panelListeners.get(panelUri) || [])) {
+      this._emitter.removeListener(event, fn);
+    }
+    this._panelListeners.delete(panelUri);
+  }
+}
 
 
 // --- Ensure ~/.svd exists ---
@@ -38,14 +72,15 @@ function autoInstall(packages, sveldDir) {
   if (!fs.existsSync(pDir)) fs.mkdirSync(pDir, { recursive: true });
   if (!fs.existsSync(path.join(pDir, "package.json")))
     fs.writeFileSync(path.join(pDir, "package.json"), JSON.stringify({ name: `svd-${path.basename(sveldDir)}`, version: "1.0.0" }));
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   console.log(`SVD: installing ${missing.join(", ")} into ~/.svd/${path.basename(sveldDir)}...`);
-  execSync(`npm install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe" });
+  execSync(`${npm} install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe" });
   console.log(`SVD: installed ${missing.join(", ")}`);
 }
 
 // --- Run server script, returns { data, actions } ---
 
-async function runServerScript(script, filePath) {
+async function runServerScript(script, filePath, sendFn, shared) {
   const pDir = projectDir(path.dirname(filePath));
   const projectRequire = Module.createRequire(filePath);
   const svdRequire = Module.createRequire(path.join(pDir, "index.js"));
@@ -80,6 +115,11 @@ async function runServerScript(script, filePath) {
 
   const cacheBefore = new Set(Object.keys(require.cache));
 
+  const sveld = {
+    send:   (msg)   => { try { sendFn(msg); } catch {} },
+    update: (props) => { try { sendFn({ type: 'propsUpdate', props }); } catch {} },
+  };
+
   const wrapped = `(async function() {\n${script}\n})()`;
   const result = await vm.runInNewContext(wrapped, {
     require: hybridRequire,
@@ -88,6 +128,8 @@ async function runServerScript(script, filePath) {
     URL,
     setTimeout,
     clearTimeout,
+    sveld,
+    shared,
   }) || {};
 
   const serverDeps = new Set(
@@ -105,6 +147,7 @@ async function runServerScript(script, filePath) {
 // --- Compile Svelte component to self-contained IIFE ---
 // Returns { js, deps } where deps is the set of real file paths bundled
 async function compileSvelte(source, originalFilePath) {
+  if (esbuildReady) await esbuildReady;
   const tmpFile = path.join(path.dirname(originalFilePath), `._sveld_tmp_${Date.now()}.svelte`);
   fs.writeFileSync(tmpFile, source, "utf8");
   try {
@@ -194,12 +237,14 @@ function wrapHtml(componentJs, data, filename = '') {
       if (e.data.type === 'actionResult') {
         const resolve = _pending.get(e.data.id);
         if (resolve) { _pending.delete(e.data.id); resolve(e.data.result); }
+      } else if (e.data.type === 'propsUpdate') {
+        if (window.__sveld_component__) window.__sveld_component__.$set(e.data.props);
       }
     });
   </script>
   <script>const __DATA__ = ${JSON.stringify(data)}; const __SVELD_FILE__ = ${JSON.stringify(filename)};</script>
   <script>${componentJs}</script>
-  <script>new SvdComponent.default({ target: document.getElementById("app"), props: __DATA__ });</script>
+  <script>window.__sveld_component__ = new SvdComponent.default({ target: document.getElementById("app"), props: __DATA__ });</script>
 </body>
 </html>`;
 }
@@ -209,6 +254,13 @@ class SvdEditorProvider {
   constructor() {
     this._actions = new Map(); // uri → actions object
     this._panels = new Map(); // uri → webviewPanel
+    this._shared = new Map(); // projectDir → SharedContext
+  }
+
+  _getShared(fsPath) {
+    const dir = path.dirname(fsPath);
+    if (!this._shared.has(dir)) this._shared.set(dir, new SharedContext());
+    return this._shared.get(dir);
   }
 
   _broadcast(msg) {
@@ -258,8 +310,12 @@ class SvdEditorProvider {
       serverDepPaths = newServerDeps;
     };
 
+    const shared = this._getShared(document.uri.fsPath);
+
     const doRender = async () => {
-      const result = await this.render(document.uri, webviewPanel.webview);
+      shared.clearPanel(document.uri.toString());
+      const sendFn = (msg) => webviewPanel.webview.postMessage(msg);
+      const result = await this.render(document.uri, webviewPanel.webview, sendFn, shared);
       if (result) { updateDepWatchers(result.deps, result.serverDeps); }
       // Re-broadcast focus so re-rendered panels restore the highlighted link
       if (webviewPanel.active) {
@@ -289,6 +345,7 @@ class SvdEditorProvider {
     webviewPanel.onDidDispose(() => {
       saveWatcher.dispose();
       for (const w of depWatchers.values()) w.dispose();
+      shared.clearPanel(document.uri.toString());
       this._actions.delete(document.uri.toString());
       this._panels.delete(document.uri.toString());
     });
@@ -320,7 +377,11 @@ class SvdEditorProvider {
       } else if (msg.type === "action") {
         const actions = this._actions.get(document.uri.toString()) || {};
         const fn = actions[msg.name];
-        if (!fn) { console.warn(`SVD: unknown action '${msg.name}'`); return; }
+        if (!fn) {
+          if (msg.name === 'refresh') await doRender();
+          else console.warn(`SVD: unknown action '${msg.name}'`);
+          return;
+        }
         let result;
         try {
           result = await fn(msg.payload);
@@ -339,15 +400,17 @@ class SvdEditorProvider {
     });
   }
 
-  async render(uri, webview) {
+  async render(uri, webview, sendFn, shared) {
     try {
       const source = fs.readFileSync(uri.fsPath, "utf8");
       const { serverScript, svelte } = parseSvd(source);
 
       autoInstall(extractPackages(source), path.dirname(uri.fsPath));
 
+      const panelShared = shared ? shared.forPanel(uri.toString(), sendFn) : { on() {}, emit() {}, state: {} };
+
       const { data, actions, serverDeps } = serverScript
-        ? await runServerScript(serverScript, uri.fsPath)
+        ? await runServerScript(serverScript, uri.fsPath, sendFn || (() => {}), panelShared)
         : { data: {}, actions: {}, serverDeps: new Set() };
 
       this._actions.set(uri.toString(), actions);
@@ -367,7 +430,35 @@ class SvdEditorProvider {
   }
 }
 
+let esbuildReady = null;
+
+function ensureEsbuildBinary(context) {
+  const extDir = context.extensionPath;
+  const platformDir = path.join(extDir, "node_modules", "@esbuild", `${process.platform}-${process.arch}`);
+  console.log(`SVD: extDir = ${extDir}, platform = ${process.platform}-${process.arch}, exists = ${fs.existsSync(platformDir)}`);
+  if (fs.existsSync(platformDir)) {
+    esbuildReady = Promise.resolve();
+    return;
+  }
+  esbuildReady = vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Sveld: installing esbuild for your platform…", cancellable: false },
+    () => new Promise((resolve, reject) => {
+      const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+      const platformPkg = `@esbuild/${process.platform}-${process.arch}`;
+      require("child_process").exec(`${npm} install ${platformPkg}`, { cwd: extDir }, (err) => {
+        if (err) {
+          vscode.window.showErrorMessage(`Sveld: failed to install esbuild — ${err.message}`);
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    })
+  );
+}
+
 function activate(context) {
+  ensureEsbuildBinary(context);
   context.subscriptions.push(SvdEditorProvider.register(context));
 }
 
