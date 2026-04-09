@@ -2,7 +2,7 @@
   "name": "sveld",
   "displayName": "Sveld",
   "description": "Render .sveld files — Svelte components with live server-side data from MongoDB, REST APIs, files and more.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "CdricDessalles",
   "license": "MIT",
   "icon": "icon.png",
