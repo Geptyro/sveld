@@ -133,15 +133,14 @@ A typical use case is a shared `Header.svelte` component that highlights which p
   import { onMount } from 'svelte'
 
   const links = [
-    { id: 'home',  label: 'Home',  file: 'home.sveld' },
-    { id: 'stats', label: 'Stats', file: 'stats.sveld' },
+    { label: 'Home',  file: 'home.sveld' },
+    { label: 'Stats', file: 'stats.sveld' },
   ];
 
-  // __SVELD_FILE__ is injected by the extension — filename of the current panel
-  let focusedFile = typeof __SVELD_FILE__ !== 'undefined' ? __SVELD_FILE__ : '';
-
-  // Derive active page from the current panel's filename — no prop needed
-  $: current = links.find(l => l.file === focusedFile)?.id ?? '';
+  // __SVELD_FILE__ is injected by the extension — filename of the current panel (constant)
+  const currentFile = typeof __SVELD_FILE__ !== 'undefined' ? __SVELD_FILE__ : '';
+  // focusedFile updates via broadcast — may differ from currentFile
+  let focusedFile = currentFile;
 
   onMount(() => {
     window.addEventListener('message', (e) => {
@@ -153,9 +152,9 @@ A typical use case is a shared `Header.svelte` component that highlights which p
 <nav>
   {#each links as link}
     <button
-      class:active={link.id === current}
+      class:active={link.file === currentFile}
       class:focused={link.file === focusedFile}
-      onclick={() => link.id !== current && sveldOpen('./' + link.file)}
+      onclick={() => link.file !== currentFile && sveldOpen('./' + link.file)}
     >{link.label}</button>
   {/each}
 </nav>
