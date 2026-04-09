@@ -105,8 +105,11 @@ async function runServerScript(script, filePath, sendFn, shared) {
         require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: mod.exports };
         return mod.exports;
       }
-      // npm package — try project first, then svd
-      try { return fromRequire(id); } catch { return svdRequire(id); }
+      // npm package — try project first, then svd, then auto-install
+      try { return fromRequire(id); } catch {}
+      try { return svdRequire(id); } catch {}
+      autoInstall([id], path.dirname(filePath));
+      return svdRequire(id);
     };
     return hybridRequire;
   }
