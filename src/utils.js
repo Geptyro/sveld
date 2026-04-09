@@ -1,20 +1,5 @@
 const fs = require("fs");
 
-const BUILTINS = new Set([
-  "fs", "path", "os", "http", "https", "vm", "crypto", "url", "util",
-  "events", "stream", "child_process", "buffer", "assert", "net", "tls",
-  "dns", "querystring", "readline", "cluster", "worker_threads", "module",
-]);
-
-function extractPackages(source) {
-  const packages = new Set();
-  for (const m of source.matchAll(/from\s+['"]([^'"./][^'"]*)['"]/g))
-    packages.add(m[1].split("/")[0]);
-  for (const m of source.matchAll(/require\(['"]([^'"./][^'"]*)['"]\)/g))
-    packages.add(m[1].split("/")[0]);
-  return [...packages].filter((p) => !BUILTINS.has(p));
-}
-
 function parseSvd(source) {
   const match = source.match(/<script\s+context="server">([\s\S]*?)<\/script>/);
   const serverScript = match ? match[1].trim() : null;
@@ -49,4 +34,4 @@ function loadDotenv(filePath) {
   }, {});
 }
 
-module.exports = { extractPackages, parseSvd, injectProps, loadDotenv };
+module.exports = { parseSvd, injectProps, loadDotenv };

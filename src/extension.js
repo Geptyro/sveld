@@ -11,7 +11,7 @@ const Module = require("module");
 const sass = require("sass");
 const EventEmitter = require("events");
 
-const { extractPackages, parseSvd, injectProps, loadDotenv } = require("./utils");
+const { parseSvd, injectProps, loadDotenv } = require("./utils");
 
 const SVD_DIR = path.join(os.homedir(), ".svd");
 const SVD_MODULES = path.join(SVD_DIR, "node_modules");
@@ -72,9 +72,8 @@ function autoInstall(packages, sveldDir) {
   if (!fs.existsSync(pDir)) fs.mkdirSync(pDir, { recursive: true });
   if (!fs.existsSync(path.join(pDir, "package.json")))
     fs.writeFileSync(path.join(pDir, "package.json"), JSON.stringify({ name: `svd-${path.basename(sveldDir)}`, version: "1.0.0" }));
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   console.log(`SVD: installing ${missing.join(", ")} into ~/.svd/${path.basename(sveldDir)}...`);
-  execSync(`${npm} install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe" });
+  execSync(`npm install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe", shell: true });
   console.log(`SVD: installed ${missing.join(", ")}`);
 }
 
@@ -105,11 +104,11 @@ async function runServerScript(script, filePath, sendFn, shared) {
         require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: mod.exports };
         return mod.exports;
       }
-      // npm package — try project first, then svd, then auto-install
+      // npm package — try project first, then svd, then install on demand (like npx)
       try { return fromRequire(id); } catch {}
       try { return svdRequire(id); } catch {}
       autoInstall([id], path.dirname(filePath));
-      return svdRequire(id);
+      return Module.createRequire(path.join(projectDir(path.dirname(filePath)), "index.js"))(id);
     };
     return hybridRequire;
   }
@@ -406,8 +405,6 @@ class SvdEditorProvider {
     try {
       const source = fs.readFileSync(uri.fsPath, "utf8");
       const { serverScript, svelte } = parseSvd(source);
-
-      autoInstall(extractPackages(source), path.dirname(uri.fsPath));
 
       const panelShared = shared ? shared.forPanel(uri.toString(), sendFn) : { on() {}, emit() {}, state: {} };
 
