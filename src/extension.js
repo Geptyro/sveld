@@ -6,12 +6,11 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
-const { execSync } = require("child_process");
 const Module = require("module");
 const sass = require("sass");
 const EventEmitter = require("events");
 
-const { parseSvd, injectProps, loadDotenv } = require("./utils");
+const { extractPackages, parseSvd, injectProps, loadDotenv } = require("./utils");
 
 const SVD_DIR = path.join(os.homedir(), ".svd");
 const SVD_MODULES = path.join(SVD_DIR, "node_modules");
@@ -64,7 +63,7 @@ function projectDir(sveldDir) {
   return path.join(SVD_DIR, `${path.basename(sveldDir)}-${hash}`);
 }
 
-function autoInstall(packages, sveldDir) {
+async function autoInstall(packages, sveldDir) {
   const pDir = projectDir(sveldDir);
   const pMods = path.join(pDir, "node_modules");
   const missing = packages.filter((p) => !fs.existsSync(path.join(pMods, p)));
@@ -72,20 +71,10 @@ function autoInstall(packages, sveldDir) {
   if (!fs.existsSync(pDir)) fs.mkdirSync(pDir, { recursive: true });
   if (!fs.existsSync(path.join(pDir, "package.json")))
     fs.writeFileSync(path.join(pDir, "package.json"), JSON.stringify({ name: `svd-${path.basename(sveldDir)}`, version: "1.0.0" }));
-  // VS Code's extension host on Windows inherits a restricted PATH that may not include Node.js.
-  // Augment PATH with common install locations so npm can be found.
-  const env = { ...process.env };
-  if (process.platform === "win32") {
-    const extra = [
-      env.APPDATA && path.join(env.APPDATA, "npm"),
-      env.ProgramFiles && path.join(env.ProgramFiles, "nodejs"),
-      env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "nodejs"),
-      "C:\\Program Files\\nodejs",
-    ].filter(Boolean);
-    env.PATH = [...extra, env.PATH || ""].join(";");
-  }
   console.log(`SVD: installing ${missing.join(", ")} into ~/.svd/${path.basename(sveldDir)}...`);
-  execSync(`npm install ${missing.join(" ")} --prefix "${pDir}"`, { stdio: "pipe", shell: true, env });
+  const Arborist = require("@npmcli/arborist");
+  const arb = new Arborist({ path: pDir });
+  await arb.reify({ add: missing });
   console.log(`SVD: installed ${missing.join(", ")}`);
 }
 
@@ -116,11 +105,8 @@ async function runServerScript(script, filePath, sendFn, shared) {
         require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: mod.exports };
         return mod.exports;
       }
-      // npm package — try project first, then svd, then install on demand (like npx)
-      try { return fromRequire(id); } catch {}
-      try { return svdRequire(id); } catch {}
-      autoInstall([id], path.dirname(filePath));
-      return Module.createRequire(path.join(projectDir(path.dirname(filePath)), "index.js"))(id);
+      // npm package — try project first, then svd
+      try { return fromRequire(id); } catch { return svdRequire(id); }
     };
     return hybridRequire;
   }
@@ -417,6 +403,8 @@ class SvdEditorProvider {
     try {
       const source = fs.readFileSync(uri.fsPath, "utf8");
       const { serverScript, svelte } = parseSvd(source);
+
+      await autoInstall(extractPackages(source, path.dirname(uri.fsPath)), path.dirname(uri.fsPath));
 
       const panelShared = shared ? shared.forPanel(uri.toString(), sendFn) : { on() {}, emit() {}, state: {} };
 

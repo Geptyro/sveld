@@ -1,4 +1,51 @@
 const fs = require("fs");
+const path = require("path");
+
+const BUILTINS = new Set([
+  "fs", "path", "os", "http", "https", "vm", "crypto", "url", "util",
+  "events", "stream", "child_process", "buffer", "assert", "net", "tls",
+  "dns", "querystring", "readline", "cluster", "worker_threads", "module",
+]);
+
+function extractPackagesFromSource(source) {
+  const packages = new Set();
+  for (const m of source.matchAll(/from\s+['"]([^'"./][^'"]*)['"]/g))
+    packages.add(m[1].split("/")[0]);
+  for (const m of source.matchAll(/require\(['"]([^'"./][^'"]*)['"]\)/g))
+    packages.add(m[1].split("/")[0]);
+  return [...packages].filter((p) => !BUILTINS.has(p));
+}
+
+function extractLocalRefs(source, fromDir) {
+  const refs = [];
+  for (const m of source.matchAll(/require\(['"](\.[^'"]*)['"]\)/g))
+    refs.push(m[1]);
+  for (const m of source.matchAll(/from\s+['"](\.[^'"]*)['"]/g))
+    refs.push(m[1]);
+  return refs.map(r => {
+    const p = path.resolve(fromDir, r);
+    for (const ext of ['', '.js', '.ts', '/index.js']) {
+      const candidate = p + ext;
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+function extractPackages(source, fromDir) {
+  const packages = new Set();
+  const visited = new Set();
+  function walk(src, dir) {
+    for (const p of extractPackagesFromSource(src)) packages.add(p);
+    for (const file of extractLocalRefs(src, dir)) {
+      if (visited.has(file)) continue;
+      visited.add(file);
+      try { walk(fs.readFileSync(file, 'utf8'), path.dirname(file)); } catch {}
+    }
+  }
+  walk(source, fromDir);
+  return [...packages];
+}
 
 function parseSvd(source) {
   const match = source.match(/<script\s+context="server">([\s\S]*?)<\/script>/);
@@ -34,4 +81,4 @@ function loadDotenv(filePath) {
   }, {});
 }
 
-module.exports = { parseSvd, injectProps, loadDotenv };
+module.exports = { extractPackages, parseSvd, injectProps, loadDotenv };
