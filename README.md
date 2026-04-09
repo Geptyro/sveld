@@ -128,19 +128,20 @@ When multiple `.sveld` files are open, the extension broadcasts which panel is c
 A typical use case is a shared `Header.svelte` component that highlights which panel is currently focused, even when viewed from another panel:
 
 ```svelte
-<!-- components/Header.svelte -->
+<!-- src/Header.svelte -->
 <script>
   import { onMount } from 'svelte'
 
-  export let current = ''; // id of the current page
-
   const links = [
-    { id: 'home',    label: 'Home',    file: 'home.sveld' },
-    { id: 'stats',   label: 'Stats',   file: 'stats.sveld' },
+    { id: 'home',  label: 'Home',  file: 'home.sveld' },
+    { id: 'stats', label: 'Stats', file: 'stats.sveld' },
   ];
 
-  // __SVELD_FILE__ is injected by the extension — the filename of the current panel
+  // __SVELD_FILE__ is injected by the extension — filename of the current panel
   let focusedFile = typeof __SVELD_FILE__ !== 'undefined' ? __SVELD_FILE__ : '';
+
+  // Derive active page from the current panel's filename — no prop needed
+  $: current = links.find(l => l.file === focusedFile)?.id ?? '';
 
   onMount(() => {
     window.addEventListener('message', (e) => {
@@ -161,17 +162,17 @@ A typical use case is a shared `Header.svelte` component that highlights which p
 
 <style>
   .active  { color: #4ecdc4; }
-  .focused { color: #ffb86c; } /* orange highlight on the focused panel's link */
+  .focused { color: #ffb86c; } /* orange — visible in all panels, not just the focused one */
 </style>
 ```
 
 ```svelte
 <!-- home.sveld -->
 <script>
-  import Header from './components/Header.svelte'
+  import Header from './src/Header.svelte'
 </script>
 
-<Header current="home" />
+<Header />
 ```
 
 ### Navigation between sveld files
