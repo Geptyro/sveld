@@ -49,17 +49,23 @@ async function runServerScript(script, filePath) {
   const projectRequire = Module.createRequire(filePath);
   const svdRequire = Module.createRequire(path.join(pDir, "index.js"));
 
+  // Load .env: global (~/.svd/.env) overridden by local (next to the .sveld file)
+  const globalEnv = loadDotenv(path.join(SVD_DIR, ".env"));
+  const localEnv = loadDotenv(path.join(path.dirname(filePath), ".env"));
+  const env = { ...process.env, ...globalEnv, ...localEnv };
+  const customProcess = { ...process, env };
+
   function makeHybridRequire(fromFile) {
     const fromRequire = Module.createRequire(fromFile);
     const hybridRequire = (id) => {
       if (id.startsWith('./') || id.startsWith('../') || path.isAbsolute(id)) {
-        // Local file — resolve, transform ESM, execute with hybridRequire
+        // Local file — resolve and execute with hybridRequire + custom process
         const resolved = fromRequire.resolve(id);
         if (require.cache[resolved]) return require.cache[resolved].exports;
         const src = fs.readFileSync(resolved, 'utf8');
         const mod = { exports: {} };
-        const wrapped = `(function(module,exports,require,__filename,__dirname){${src}\n})`;
-        vm.runInThisContext(wrapped)(mod, mod.exports, makeHybridRequire(resolved), resolved, path.dirname(resolved));
+        const wrapped = `(function(module,exports,require,__filename,__dirname,process){${src}\n})`;
+        vm.runInThisContext(wrapped)(mod, mod.exports, makeHybridRequire(resolved), resolved, path.dirname(resolved), customProcess);
         require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: mod.exports };
         return mod.exports;
       }
@@ -70,11 +76,6 @@ async function runServerScript(script, filePath) {
   }
 
   const hybridRequire = makeHybridRequire(filePath);
-
-  // Load .env: global (~/.svd/.env) overridden by local (next to the .sveld file)
-  const globalEnv = loadDotenv(path.join(SVD_DIR, ".env"));
-  const localEnv = loadDotenv(path.join(path.dirname(filePath), ".env"));
-  const env = { ...process.env, ...globalEnv, ...localEnv };
 
   const cacheBefore = new Set(Object.keys(require.cache));
 
