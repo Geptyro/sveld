@@ -125,6 +125,55 @@ When multiple `.sveld` files are open, the extension broadcasts which panel is c
 - A `focusChange` message (with the active filename) is posted to every open sveld panel.
 - When switching to a non-sveld editor, a 100ms debounce clears the highlight in all panels.
 
+A typical use case is a shared `Header.svelte` component that highlights which panel is currently focused, even when viewed from another panel:
+
+```svelte
+<!-- components/Header.svelte -->
+<script>
+  import { onMount } from 'svelte'
+
+  export let current = ''; // id of the current page
+
+  const links = [
+    { id: 'home',    label: 'Home',    file: 'home.sveld' },
+    { id: 'stats',   label: 'Stats',   file: 'stats.sveld' },
+  ];
+
+  // __SVELD_FILE__ is injected by the extension — the filename of the current panel
+  let focusedFile = typeof __SVELD_FILE__ !== 'undefined' ? __SVELD_FILE__ : '';
+
+  onMount(() => {
+    window.addEventListener('message', (e) => {
+      if (e.data.type === 'focusChange') focusedFile = e.data.file;
+    });
+  });
+</script>
+
+<nav>
+  {#each links as link}
+    <button
+      class:active={link.id === current}
+      class:focused={link.file === focusedFile}
+      onclick={() => link.id !== current && sveldOpen('./' + link.file)}
+    >{link.label}</button>
+  {/each}
+</nav>
+
+<style>
+  .active  { color: #4ecdc4; }
+  .focused { color: #ffb86c; } /* orange highlight on the focused panel's link */
+</style>
+```
+
+```svelte
+<!-- home.sveld -->
+<script>
+  import Header from './components/Header.svelte'
+</script>
+
+<Header current="home" />
+```
+
 ### Navigation between sveld files
 Call `sveldOpen('./path/to/other.sveld')` (globally available in the webview) to open another `.sveld` file:
 
