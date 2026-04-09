@@ -147,7 +147,6 @@ async function runServerScript(script, filePath, sendFn, shared) {
 // --- Compile Svelte component to self-contained IIFE ---
 // Returns { js, deps } where deps is the set of real file paths bundled
 async function compileSvelte(source, originalFilePath) {
-  if (esbuildReady) await esbuildReady;
   const tmpFile = path.join(path.dirname(originalFilePath), `._sveld_tmp_${Date.now()}.svelte`);
   fs.writeFileSync(tmpFile, source, "utf8");
   try {
@@ -430,35 +429,7 @@ class SvdEditorProvider {
   }
 }
 
-let esbuildReady = null;
-
-function ensureEsbuildBinary(context) {
-  const extDir = context.extensionPath;
-  const platformDir = path.join(extDir, "node_modules", "@esbuild", `${process.platform}-${process.arch}`);
-  console.log(`SVD: extDir = ${extDir}, platform = ${process.platform}-${process.arch}, exists = ${fs.existsSync(platformDir)}`);
-  if (fs.existsSync(platformDir)) {
-    esbuildReady = Promise.resolve();
-    return;
-  }
-  esbuildReady = vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Sveld: installing esbuild for your platform…", cancellable: false },
-    () => new Promise((resolve, reject) => {
-      const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-      const platformPkg = `@esbuild/${process.platform}-${process.arch}`;
-      require("child_process").exec(`${npm} install ${platformPkg}`, { cwd: extDir }, (err) => {
-        if (err) {
-          vscode.window.showErrorMessage(`Sveld: failed to install esbuild — ${err.message}`);
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
-    })
-  );
-}
-
 function activate(context) {
-  ensureEsbuildBinary(context);
   context.subscriptions.push(SvdEditorProvider.register(context));
 }
 
