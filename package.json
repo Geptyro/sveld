@@ -37,6 +37,7 @@
   "scripts": {
     "build": "node build.js",
     "package": "npm run build && vsce package",
+    "install-ext": "code --install-extension $(ls sveld-*.vsix | tail -1)",
     "test": "jest"
   },
   "contributes": {
