@@ -5,7 +5,7 @@ esbuild.build({
   bundle: true,
   outfile: "dist/extension.js",
   platform: "node",
-  external: ["vscode", "esbuild"], // provided by host or node_modules at runtime
+  external: ["vscode", "esbuild", "fsevents"], // vscode provided by host, esbuild has native binaries
   format: "cjs",
   minify: false,
 }).then(() => console.log("Extension built → dist/extension.js"))

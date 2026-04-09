@@ -1,11 +1,8 @@
 .vscode/**
 src/**
-node_modules/jest/**
-node_modules/jest-*/**
-node_modules/@jest/**
-node_modules/babel-jest/**
-node_modules/babel-plugin-jest*/**
-node_modules/babel-preset-jest/**
+node_modules/**
+!node_modules/esbuild/**
+!node_modules/@esbuild/**
 test/**
 .github/**
 build.js
