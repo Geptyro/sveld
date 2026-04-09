@@ -62,10 +62,9 @@
       }
     ]
   },
-  "dependencies": {
-    "esbuild": "^0.25.0"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "esbuild-svelte": "^0.9.4",
     "jest": "^30.3.0",
     "sass": "^1.99.0",
