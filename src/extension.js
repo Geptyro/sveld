@@ -56,7 +56,7 @@ async function runServerScript(script, filePath) {
         // Local file — resolve, transform ESM, execute with hybridRequire
         const resolved = fromRequire.resolve(id);
         if (require.cache[resolved]) return require.cache[resolved].exports;
-        const src = esmToCjs(fs.readFileSync(resolved, 'utf8'));
+        const src = fs.readFileSync(resolved, 'utf8');
         const mod = { exports: {} };
         const wrapped = `(function(module,exports,require,__filename,__dirname){${src}\n})`;
         vm.runInThisContext(wrapped)(mod, mod.exports, makeHybridRequire(resolved), resolved, path.dirname(resolved));
